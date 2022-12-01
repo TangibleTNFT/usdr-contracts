@@ -161,6 +161,8 @@ contract RePurchaseManager is PurchaseManager, IERC721Receiver {
                 amountToFillUp + amountOfPaymentToken,
                 amountToFillUp
             );
+        } else {
+            paymentToken.approve(marketplace, amountOfPaymentToken);
         }
 
         if (tokenId == 0) {
@@ -325,6 +327,8 @@ contract RePurchaseManager is PurchaseManager, IERC721Receiver {
                 amountToFillUp + amountOfPaymentToken,
                 amountToFillUp
             );
+        } else {
+            paymentToken.approve(marketplace, amountOfPaymentToken);
         }
         IFactoryExt factory = ITangibleMarketplace(marketplace).factory();
         //check if this ftnft is in initailSale - that means when bought

@@ -18,28 +18,78 @@ interface IBatchSender {
     ) external;
 }
 
+interface IExchangeProxy {
+    function swapFromToken(
+        address token,
+        uint256 amountIn,
+        uint256 minAmountOut,
+        address to
+    ) external returns (uint256 amountOut);
+}
+
 contract AffiliateExchange is Pausable, AddressAccessor {
+    event Mint(
+        address indexed tokenIn,
+        address indexed minter,
+        uint256 indexed timestamp,
+        address receiver,
+        uint256 amountIn,
+        uint256 amountOut,
+        uint256 affiliatePayout
+    );
+
     uint256 private _pending;
 
+    constructor() {
+        _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
+    }
+
     function mint(
+        address tokenIn,
         uint256 amountIn,
+        uint256 minAmountOut,
         address receiver,
         uint256 affiliatePayout,
+        uint256 timestamp,
         uint8 v,
         bytes32 r,
         bytes32 s
     ) external whenNotPaused {
-        bytes32 hash = keccak256(
-            abi.encodePacked(msg.sender, amountIn, affiliatePayout)
+        {
+            bytes32 hash = keccak256(
+                abi.encodePacked(
+                    msg.sender,
+                    tokenIn,
+                    amountIn,
+                    affiliatePayout,
+                    timestamp
+                )
+            );
+            bytes32 messageDigest = keccak256(
+                abi.encodePacked("\x19Ethereum Signed Message:\n32", hash)
+            );
+            address signer = addressProvider.getAddress(
+                bytes32(keccak256("affiliateSigner"))
+            );
+            require(signer == ecrecover(messageDigest, v, r, s));
+        }
+        uint256 amountOut = _mint(
+            tokenIn,
+            amountIn,
+            minAmountOut,
+            receiver,
+            affiliatePayout
         );
-        bytes32 messageDigest = keccak256(
-            abi.encodePacked("\x19Ethereum Signed Message:\n32", hash)
+
+        emit Mint(
+            tokenIn,
+            msg.sender,
+            timestamp,
+            receiver,
+            amountIn,
+            amountOut,
+            affiliatePayout
         );
-        address signer = addressProvider.getAddress(
-            bytes32(keccak256("affiliateSigner"))
-        );
-        require(signer == ecrecover(messageDigest, v, r, s));
-        _mint(amountIn, receiver, affiliatePayout);
     }
 
     function pause() external whenNotPaused onlyRole(DEFAULT_ADMIN_ROLE) {
@@ -80,10 +130,12 @@ contract AffiliateExchange is Pausable, AddressAccessor {
     }
 
     function _mint(
+        address tokenIn,
         uint256 amountIn,
+        uint256 minAmountOut,
         address receiver,
         uint256 affiliatePayout
-    ) private {
+    ) private returns (uint256 amountOut) {
         (
             address underlying,
             address exchange,
@@ -103,13 +155,34 @@ contract AffiliateExchange is Pausable, AddressAccessor {
                 (address, address, address, address, address)
             );
 
+        IERC20(tokenIn).transferFrom(msg.sender, address(this), amountIn);
+
         // mint USDR for minter
-        IERC20(underlying).transferFrom(msg.sender, address(this), amountIn);
-        IERC20(underlying).approve(exchange, amountIn);
-        IExchange(exchange).swapFromUnderlying(amountIn, receiver);
+        if (tokenIn == underlying) {
+            IERC20(underlying).approve(exchange, amountIn);
+            amountOut = IExchange(exchange).swapFromUnderlying(
+                amountIn,
+                receiver
+            );
+        } else {
+            address exchangeProxy = addressProvider.getAddress(
+                keccak256("USDRExchangeProxy")
+            );
+            IERC20(tokenIn).approve(exchangeProxy, amountIn);
+            amountOut = IExchangeProxy(exchangeProxy).swapFromToken(
+                tokenIn,
+                amountIn,
+                minAmountOut,
+                receiver
+            );
+        }
 
         // mint extra USDR for affiliates if needed
-        uint256 excessUSDR = IERC20(usdr).balanceOf(address(this)) - _pending;
+        uint256 excessUSDR;
+        uint256 usdrBalance = IERC20(usdr).balanceOf(address(this));
+        if (usdrBalance >= _pending) {
+            excessUSDR = usdrBalance - _pending;
+        }
         if (affiliatePayout > excessUSDR) {
             uint256 mintExtra = affiliatePayout - excessUSDR;
             uint256 tngblPrice = IPriceOracle(oracle).quote(1e18);

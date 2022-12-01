@@ -172,6 +172,8 @@ contract GoldPurchaseManager is PurchaseManager, IERC721Receiver {
                 amountToFillUp + amountOfPaymentToken,
                 amountToFillUp
             );
+        } else {
+            paymentToken.approve(marketplace, amountOfPaymentToken);
         }
 
         if (tokenId == 0) {
@@ -325,6 +327,8 @@ contract GoldPurchaseManager is PurchaseManager, IERC721Receiver {
                 amountToFillUp + amountOfPaymentToken,
                 amountToFillUp
             );
+        } else {
+            paymentToken.approve(marketplace, amountOfPaymentToken);
         }
 
         ITangibleMarketplace(marketplace).buyFraction(

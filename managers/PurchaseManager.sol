@@ -128,6 +128,9 @@ abstract contract PurchaseManager is AddressAccessor {
         IERC20 paymentToken,
         uint256 amount
     ) internal view returns (uint256 reserveAmount) {
+        if (amount == 0) {
+            return reserveAmount;
+        }
         (address tokenSwap, address underlying) = abi.decode(
             addressProvider.getAddresses(
                 abi.encode(TOKEN_SWAP_ADDRESS, UNDERLYING_ADDRESS)
@@ -138,29 +141,29 @@ abstract contract PurchaseManager is AddressAccessor {
             .decimals();
         uint8 underlyingDecimals = IERC20Metadata(underlying).decimals();
         // we use this algorithm because curve doesn't have ability to calculate quoteIn
-        uint256 calcAmount = _convertToCorrectDecimals(
+        reserveAmount = _convertToCorrectDecimals(
             amount,
             paymentDecimals,
             underlyingDecimals
         );
-
+        uint256 calcAmount;
         do {
-            reserveAmount = ITokenSwap(tokenSwap).quoteOut(
+            calcAmount = ITokenSwap(tokenSwap).quoteOut(
                 underlying,
                 address(paymentToken),
-                calcAmount
+                reserveAmount
             );
 
-            if (reserveAmount < amount) {
-                calcAmount =
-                    calcAmount +
+            if (calcAmount < amount) {
+                reserveAmount =
+                    reserveAmount +
                     _convertToCorrectDecimals(
-                        reserveAmount - amount,
+                        amount - calcAmount,
                         paymentDecimals,
                         underlyingDecimals
                     ) +
                     10**uint256(underlyingDecimals); // add 1 dollar
             }
-        } while (reserveAmount < amount);
+        } while (calcAmount < amount);
     }
 }
