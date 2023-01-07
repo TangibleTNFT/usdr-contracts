@@ -35,8 +35,30 @@ contract USDRExchange is AddressAccessor, IExchange, Pausable {
 
     MintingStats public mintingStats;
 
-    constructor() {
+    constructor(USDRExchange previousImpl) {
         _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
+        if (address(previousImpl) != address(0)) {
+            (
+                uint256 tngblToUSDR,
+                uint256 underlyingToUSDR,
+                uint256 usdrToPromissory,
+                uint256 usdrToTNGBL,
+                uint256 usdrToUnderlying,
+                uint256 usdrFromGains,
+                uint256 usdrFromRebase
+            ) = previousImpl.mintingStats();
+            mintingStats = MintingStats({
+                tngblToUSDR: tngblToUSDR,
+                underlyingToUSDR: underlyingToUSDR,
+                usdrToPromissory: usdrToPromissory,
+                usdrToTNGBL: usdrToTNGBL,
+                usdrToUnderlying: usdrToUnderlying,
+                usdrFromGains: usdrFromGains,
+                usdrFromRebase: usdrFromRebase
+            });
+            depositFee = previousImpl.depositFee();
+            withdrawalFee = previousImpl.withdrawalFee();
+        }
     }
 
     function pause() external onlyRole(DEFAULT_ADMIN_ROLE) {
@@ -51,28 +73,8 @@ contract USDRExchange is AddressAccessor, IExchange, Pausable {
         return _scaleFromUnderlying(amount);
     }
 
-    function updateMintingStats(int128[7] calldata delta)
-        external
-        onlyRole(DEFAULT_ADMIN_ROLE)
-    {
-        mintingStats.tngblToUSDR = uint256(
-            int256(mintingStats.tngblToUSDR) + delta[0]
-        );
-        mintingStats.underlyingToUSDR = uint256(
-            int256(mintingStats.underlyingToUSDR) + delta[1]
-        );
-        mintingStats.usdrToPromissory = uint256(
-            int256(mintingStats.usdrToPromissory) + delta[2]
-        );
-        mintingStats.usdrToTNGBL = uint256(
-            int256(mintingStats.usdrToTNGBL) + delta[3]
-        );
-        mintingStats.usdrToUnderlying = uint256(
-            int256(mintingStats.usdrToUnderlying) + delta[4]
-        );
-        mintingStats.usdrFromGains = uint256(
-            int256(mintingStats.usdrFromGains) + delta[5]
-        );
+    function updateMintingStats(int128[7] calldata delta) external {
+        require(msg.sender == addressProvider.getAddress(USDR_ADDRESS));
         mintingStats.usdrFromRebase = uint256(
             int256(mintingStats.usdrFromRebase) + delta[6]
         );
