@@ -16,10 +16,9 @@ contract WrappedUSDRRateProvider is IRateProvider {
     }
 
     /**
-     * @return the value of wUSDR in terms of USDR
+     * @return the value of wUSDR in terms of USDR scaled to 18 decimals
      */
     function getRate() external view override returns (uint256) {
-        uint256 oneWUSDR = 10**IERC20MetadataUpgradeable(wUSDR).decimals();
-        return IERC4626Upgradeable(wUSDR).previewRedeem(oneWUSDR);
+        return IERC4626Upgradeable(wUSDR).previewRedeem(1e18);
     }
 }

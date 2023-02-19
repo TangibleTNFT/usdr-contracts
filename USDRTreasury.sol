@@ -68,7 +68,7 @@ contract USDRTreasury is AddressAccessor, ITreasury, IERC721Receiver {
         incentiveThreshold = 130;
         tngblBurnThreshold = 130;
         purchaseStableMintedRedeemedThreshold = 50;
-        purchaseStableMarketcapThreshold = 10;
+        purchaseStableMarketcapThreshold = 15;
     }
 
     function setThresholds(
@@ -335,16 +335,11 @@ contract USDRTreasury is AddressAccessor, ITreasury, IERC721Receiver {
             tracker.ftnftTreasuryPlaced(address(ftnft), tokenIds[i], false);
         }
         // the last received nft is the one underlying in ftnft
-        if (
-            (lastReceivedNFT == address(ftnft.tnft())) &&
-            (lastReceivedTokenId == ftnft.tnftTokenId())
-        ) {
+        address tnft = address(ftnft.tnft());
+        uint256 tnftTokenId = ftnft.tnftTokenId();
+        if (IERC721(tnft).ownerOf(tnftTokenId) == address(this)) {
             tracker.ftnftTreasuryPlaced(address(ftnft), tokenIds[0], false);
-            tracker.tnftTreasuryPlaced(
-                lastReceivedNFT,
-                lastReceivedTokenId,
-                true
-            );
+            tracker.tnftTreasuryPlaced(tnft, tnftTokenId, true);
         } else {
             tracker.updateFractionData(address(ftnft), tokenIds[0]);
         }
@@ -540,60 +535,6 @@ contract USDRTreasury is AddressAccessor, ITreasury, IERC721Receiver {
         emit RentClaimed(revenueToken, claimedAmount);
     }
 
-    function claimTngblRevenue(
-        address contractAddress,
-        uint256 tokenId,
-        bool fraction
-    ) external {
-        (address revenueShare, address piNft, address tngbl) = abi.decode(
-            addressProvider.getAddresses(
-                abi.encode(
-                    TANGIBLE_REVENUE_SHARE_ADDRESS,
-                    TANGIBLE_PINFT_ADDRESS,
-                    TNGBL_ADDRESS
-                )
-            ),
-            (address, address, address)
-        );
-        //rev data
-        address revenueToken = ITangibleRevenueShare(revenueShare)
-            .revenueToken();
-        uint256 balanceBeforeRevToken = IERC20(revenueToken).balanceOf(
-            address(this)
-        );
-        //tngbl data
-        uint256 balanceBeforeTngblToken = IERC20(tngbl).balanceOf(
-            address(this)
-        );
-        // claim tngbl first
-        if (!fraction) {
-            // it is TNFT
-            (uint256 free, ) = ITangiblePiNFT(piNft).claimableIncome(
-                ITangibleNFT(contractAddress).tnftToPassiveNft(tokenId)
-            );
-            ITangibleNFT(contractAddress).claim(tokenId, free);
-        } else {
-            // it is FRACTION
-            ITangibleFractionsNFT(contractAddress).claim(
-                tokenId,
-                ITangibleFractionsNFT(contractAddress).claimableIncome(tokenId)
-            );
-        }
-        uint256 claimedAmountTngbl = IERC20(tngbl).balanceOf(address(this)) -
-            balanceBeforeTngblToken;
-        // claim revenue
-        ITangibleRevenueShare(revenueShare).claimForToken(
-            contractAddress,
-            tokenId
-        );
-        uint256 claimedAmountRev = IERC20(revenueToken).balanceOf(
-            address(this)
-        ) - balanceBeforeRevToken;
-
-        emit TNGBLClaimed(tngbl, claimedAmountTngbl);
-        emit RevenueShareClaimed(revenueToken, claimedAmountRev);
-    }
-
     function payFractionStorage(
         address ftnft,
         uint256 tokenId,
@@ -641,6 +582,11 @@ contract USDRTreasury is AddressAccessor, ITreasury, IERC721Receiver {
     ) external override returns (bytes4) {
         lastReceivedNFT = msg.sender;
         lastReceivedTokenId = tokenId;
+        require(
+            IERC721(lastReceivedNFT).ownerOf(lastReceivedTokenId) ==
+                address(this),
+            "Not owner"
+        );
         return IERC721Receiver.onERC721Received.selector;
     }
 
