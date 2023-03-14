@@ -24,6 +24,14 @@ import "./tangibleInterfaces/ITangibleRevenueShare.sol";
 import "./tangibleInterfaces/ITangiblePiNFT.sol";
 import "./AddressAccessor.sol";
 
+bytes32 constant INCENTIVE_VAULT_ADDRESS = bytes32(keccak256("IncentiveVault"));
+
+interface IIncentiveVault {
+    function availableAmount() external view returns (uint256);
+
+    function withdraw(uint256 amount) external;
+}
+
 interface ITreasuryTrackerExt is ITreasuryTracker {
     //fractions
     function getFractionContractsInTreasury()
@@ -105,36 +113,28 @@ contract USDRTreasury is AddressAccessor, ITreasury, IERC721Receiver {
         _verifyBacking(100, true);
     }
 
-    function triggerRebase(uint256 depositAmount)
+    function triggerRebase()
         external
         onlyRole(CONTROLLER_ROLE)
+        returns (uint256)
     {
-        uint256 amount = rebaseAmount + depositAmount;
         ITreasury.TreasuryValue memory value = getTreasuryValue();
-        (address underlying, address usdr, address exchange) = abi.decode(
+        (address incentiveVault, address usdr, address exchange) = abi.decode(
             addressProvider.getAddresses(
                 abi.encode(
-                    UNDERLYING_ADDRESS,
+                    INCENTIVE_VAULT_ADDRESS,
                     USDR_ADDRESS,
                     USDR_EXCHANGE_ADDRESS
                 )
             ),
             (address, address, address)
         );
-        if (depositAmount > 0) {
-            try
-                IERC20(underlying).transferFrom(
-                    msg.sender,
-                    address(this),
-                    depositAmount
-                )
-            returns (bool success) {
-                if (!success) amount = amount - depositAmount;
-            } catch (
-                bytes memory /*lowLevelData*/
-            ) {
-                amount = amount - depositAmount;
-            }
+        uint256 amount = rebaseAmount;
+        uint256 incentiveAmount = IIncentiveVault(incentiveVault)
+            .availableAmount();
+        if (incentiveAmount > 0) {
+            IIncentiveVault(incentiveVault).withdraw(incentiveAmount);
+            amount += incentiveAmount;
         }
         require(amount > 0);
         uint256 marketCap = IExchange(exchange).scaleToUnderlying(
@@ -145,6 +145,7 @@ contract USDRTreasury is AddressAccessor, ITreasury, IERC721Receiver {
         }
         IUSDR(usdr).rebase(amount);
         rebaseAmount = 0;
+        return amount;
     }
 
     //workaround for purchasing initial sale RE
