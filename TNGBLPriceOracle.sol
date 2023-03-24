@@ -5,6 +5,7 @@ import "@openzeppelin/contracts/access/AccessControl.sol";
 import "@uniswap/v2-periphery/contracts/interfaces/IUniswapV2Router02.sol";
 
 import "./constants/addresses.sol";
+import "./constants/roles.sol";
 import "./interfaces/IPriceOracle.sol";
 import "./AddressAccessor.sol";
 
@@ -18,6 +19,8 @@ interface IBaseOracle {
 }
 
 contract TNGBLPriceOracle is AddressAccessor, IPriceOracle {
+    event TNGBLReferencePriceUpdated(uint256 price);
+
     address public immutable baseOracle;
     address public immutable baseDenominatorToken;
 
@@ -26,6 +29,7 @@ contract TNGBLPriceOracle is AddressAccessor, IPriceOracle {
     address private _router;
     address private _output;
     address[] private _path;
+    uint256 private _tngblReferencePrice;
 
     constructor(address baseOracle_, address baseDenominatorToken_) {
         baseOracle = baseOracle_;
@@ -34,8 +38,19 @@ contract TNGBLPriceOracle is AddressAccessor, IPriceOracle {
         _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
     }
 
-    function quote(uint256 amountIn) external view returns (uint256 amountOut) {
-        if (amountIn == 0) return 0;
+    function updateTNGBLReferencePrice(uint256 price)
+        external
+        onlyRole(CONTROLLER_ROLE)
+    {
+        _tngblReferencePrice = price;
+        emit TNGBLReferencePriceUpdated(price);
+    }
+
+    function rawQuote(uint256 amountIn)
+        public
+        view
+        returns (uint256 amountOut)
+    {
         address tngbl = addressProvider.getAddress(TNGBL_ADDRESS);
         try
             IBaseOracle(baseOracle).consult(
@@ -58,6 +73,18 @@ contract TNGBLPriceOracle is AddressAccessor, IPriceOracle {
             uint256[] memory amountsOut = IUniswapV2Router02(_router)
                 .getAmountsOut(amountOut, _path);
             amountOut = amountsOut[amountsOut.length - 1];
+        }
+    }
+
+    function quote(uint256 amountIn) external view returns (uint256 amountOut) {
+        if (amountIn == 0) return 0;
+        amountOut = rawQuote(amountIn);
+        uint256 referencePrice = _tngblReferencePrice;
+        if (referencePrice > 0) {
+            // use manually set reference price override to protect against
+            // price manipulation
+            uint256 referenceAmount = (amountIn * referencePrice) / 1e18;
+            if (referenceAmount < amountOut) amountOut = referenceAmount;
         }
     }
 

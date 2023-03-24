@@ -28,6 +28,15 @@ interface IUSDR is IERC20Upgradeable {
 }
 
 abstract contract PurchaseManager is AddressAccessor {
+    uint256 public swapThreshold = 10000; // 0.1%
+
+    function changeSwapThreshold(uint256 _swapThreshold)
+        external
+        onlyRole(DEFAULT_ADMIN_ROLE)
+    {
+        swapThreshold = _swapThreshold;
+    }
+
     function _validatePurchase(uint256 amount) internal view {
         if (amount == 0) {
             return; // all good, no underlying spending, only usdr
@@ -165,5 +174,17 @@ abstract contract PurchaseManager is AddressAccessor {
                     10**uint256(underlyingDecimals); // add 1 dollar
             }
         } while (calcAmount < amount);
+        uint256 scaledReserveAmount = _convertToCorrectDecimals(
+            reserveAmount,
+            underlyingDecimals,
+            paymentDecimals
+        );
+        if (scaledReserveAmount > calcAmount) {
+            require(
+                (scaledReserveAmount - calcAmount) <
+                    (calcAmount * swapThreshold) / 10000000,
+                "over threshold"
+            );
+        }
     }
 }

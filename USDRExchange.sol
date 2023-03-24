@@ -5,6 +5,7 @@ import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/security/Pausable.sol";
 import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import "@openzeppelin/contracts/utils/math/SafeCast.sol";
 
 import "./constants/addresses.sol";
 import "./constants/roles.sol";
@@ -16,6 +17,8 @@ import "./tokens/interfaces/IMintableERC20.sol";
 import "./AddressAccessor.sol";
 
 contract USDRExchange is AddressAccessor, IExchange, Pausable {
+    using SafeCast for int256;
+    using SafeCast for uint256;
     using SafeERC20 for IERC20;
 
     struct MintingStats {
@@ -75,9 +78,8 @@ contract USDRExchange is AddressAccessor, IExchange, Pausable {
 
     function updateMintingStats(int128[7] calldata delta) external {
         require(msg.sender == addressProvider.getAddress(USDR_ADDRESS));
-        mintingStats.usdrFromRebase = uint256(
-            int256(mintingStats.usdrFromRebase) + delta[6]
-        );
+        mintingStats.usdrFromRebase = (mintingStats.usdrFromRebase.toInt256() +
+            delta[6]).toUint256();
     }
 
     function maxTNGBLMintingAmount() external view returns (uint256) {
@@ -132,6 +134,8 @@ contract USDRExchange is AddressAccessor, IExchange, Pausable {
         external
         onlyRole(DEFAULT_ADMIN_ROLE)
     {
+        require(depositFee_ <= 100e2, "invalid deposit fee");
+        require(withdrawalFee_ <= 100e2, "invalid withdrawal fee");
         depositFee = depositFee_;
         withdrawalFee = withdrawalFee_;
     }
@@ -206,8 +210,9 @@ contract USDRExchange is AddressAccessor, IExchange, Pausable {
             "amount too high"
         );
         IERC20(tngbl).safeTransferFrom(msg.sender, treasury, amountIn);
-        uint256 quote = IPriceOracle(tngblOracle).quote(1e18);
-        amountOut = _applyFee(quote * amountIn, depositFee) / 1e27;
+        uint256 tngblPrice = _getTNGBLReferencePrice(tngblOracle);
+        // price * amount brings us to 36 decimals, dividing by 1e27 back to 9
+        amountOut = _applyFee(tngblPrice * amountIn, depositFee) / 1e27;
         require(amountOut >= amountOutMin, "insufficient output amount");
         IUSDR(usdr).mint(to, amountOut);
         mintingStats.tngblToUSDR += amountOut;
@@ -229,7 +234,7 @@ contract USDRExchange is AddressAccessor, IExchange, Pausable {
             address(this),
             amountIn
         );
-        IERC20(underlying).transfer(treasury, amountIn);
+        IERC20(underlying).safeTransfer(treasury, amountIn);
         amountOut = _applyFee(_scaleFromUnderlying(amountIn), depositFee);
         IUSDR(usdr).mint(to, amountOut);
         mintingStats.underlyingToUSDR += amountOut;
@@ -265,10 +270,8 @@ contract USDRExchange is AddressAccessor, IExchange, Pausable {
         pure
         returns (uint256)
     {
-        assembly {
-            if iszero(iszero(fee)) {
-                amount := sub(amount, div(mul(amount, fee), 10000))
-            }
+        if (fee > 0) {
+            amount = amount - ((amount * fee) / 100e2);
         }
         return amount;
     }
@@ -278,17 +281,12 @@ contract USDRExchange is AddressAccessor, IExchange, Pausable {
         pure
         returns (uint256 scale)
     {
-        assembly {
-            switch lt(usdrDecimals, underlyingDecimals)
-            case 0 {
-                scale := shl(
-                    128,
-                    exp(10, sub(usdrDecimals, underlyingDecimals))
-                )
-            }
-            default {
-                scale := exp(10, sub(underlyingDecimals, usdrDecimals))
-            }
+        if (usdrDecimals <= underlyingDecimals) {
+            scale = 10**(underlyingDecimals - usdrDecimals);
+        } else {
+            // encode scaling direction into scale by shifting the scale
+            // 128 bits to the left
+            scale = (10**(usdrDecimals - underlyingDecimals)) << 128;
         }
     }
 
@@ -305,8 +303,12 @@ contract USDRExchange is AddressAccessor, IExchange, Pausable {
             10 *
             mintingStats.tngblToUSDR;
         if (redeemed >= minted) return 0;
+        // minting stats are denoted in 9 decimals
+        // multiplying by 1e26 brings us to 35
+        // dividing by the TNGBL price (18 decimals) brings us to 17
+        //   or a factor of 0.1e18 (10% per ether)
         uint256 amount = ((minted - redeemed) * 1e26) /
-            IPriceOracle(tngblOracle).quote(1e18);
+            _getTNGBLReferencePrice(tngblOracle);
         return amount < 1e16 ? 0 : amount;
     }
 
@@ -345,7 +347,7 @@ contract USDRExchange is AddressAccessor, IExchange, Pausable {
             "sufficient backing"
         ); // can withdraw underlying or pDAI
         uint256 tngblBalance = IERC20(tngbl).balanceOf(treasury);
-        uint256 tngblPrice = IPriceOracle(oracle).quote(1e18);
+        uint256 tngblPrice = _getTNGBLReferencePrice(oracle);
         amountOut = (amountOut * (10**tngblDecimals)) / tngblPrice;
         require(tngblBalance >= amountOut, "insufficient backing");
     }
@@ -396,24 +398,23 @@ contract USDRExchange is AddressAccessor, IExchange, Pausable {
         amountOut = _applyFee(_scaleToUnderlying(amountIn), withdrawalFee);
     }
 
+    function _getTNGBLReferencePrice(address oracle)
+        private
+        view
+        returns (uint256)
+    {
+        return IPriceOracle(oracle).quote(1e18); // price for 1 TNGBL token;
+    }
+
     function _scaleAmount(
         uint256 amount,
         uint8 fromDecimals,
         uint8 toDecimals
     ) private pure returns (uint256) {
-        assembly {
-            switch lt(fromDecimals, toDecimals)
-            case 0 {
-                if gt(fromDecimals, toDecimals) {
-                    amount := div(
-                        amount,
-                        exp(10, sub(fromDecimals, toDecimals))
-                    )
-                }
-            }
-            default {
-                amount := mul(amount, exp(10, sub(toDecimals, fromDecimals)))
-            }
+        if (fromDecimals <= toDecimals) {
+            amount = amount * (10**(toDecimals - fromDecimals));
+        } else {
+            amount = amount / (10**(fromDecimals - toDecimals));
         }
         return amount;
     }
@@ -424,20 +425,16 @@ contract USDRExchange is AddressAccessor, IExchange, Pausable {
         returns (uint256 result)
     {
         uint256 scale = _scale;
-        assembly {
-            switch scale
-            case 0 {
-                result := amount
-            }
-            default {
-                switch gt(scale, 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF)
-                case 0 {
-                    result := div(amount, scale)
-                }
-                default {
-                    result := mul(amount, shr(128, scale))
-                }
-            }
+        if (scale == 0) return amount;
+        if (scale > 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF) {
+            // if scale is shifted by 128 bits to the left, then
+            // USDR decimals are greater than underlying decimals
+            // -> scale up
+            result = amount * (scale >> 128);
+        } else {
+            // underlying decimals are greater than USDR decimals
+            // -> scale down
+            result = amount / scale;
         }
     }
 
@@ -447,20 +444,16 @@ contract USDRExchange is AddressAccessor, IExchange, Pausable {
         returns (uint256 result)
     {
         uint256 scale = _scale;
-        assembly {
-            switch scale
-            case 0 {
-                result := amount
-            }
-            default {
-                switch gt(scale, 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF)
-                case 0 {
-                    result := mul(amount, scale)
-                }
-                default {
-                    result := div(amount, shr(128, scale))
-                }
-            }
+        if (scale == 0) return amount;
+        if (scale > 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF) {
+            // if scale is shifted by 128 bits to the left, then
+            // USDR decimals are greater than underlying decimals
+            // -> scale down
+            result = amount / (scale >> 128);
+        } else {
+            // underlying decimals are greater than USDR decimals
+            // -> scale up
+            result = amount * scale;
         }
     }
 }
