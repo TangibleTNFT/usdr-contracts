@@ -61,13 +61,15 @@ contract TreasuryRentCollector is AddressAccessor, Pausable {
 
     /**
      * @notice Collects rent for the specified NFT held in the treasury
-     * @param index Index of the NFT in the treasury
+     * @param tokenIndex Index of the NFT in the treasury
+     * @param fractionIndex Index of the fraction in the treasury
      * @param isFraction True if the NFT is a fractional NFT, false otherwise
      */
-    function collectRent(uint256 index, bool isFraction)
-        external
-        whenNotPaused
-    {
+    function collectRent(
+        uint256 tokenIndex,
+        uint256 fractionIndex,
+        bool isFraction
+    ) external whenNotPaused {
         (address rentShare, address treasury, address treasuryTracker) = abi
             .decode(
                 addressProvider.getAddresses(
@@ -87,9 +89,14 @@ contract TreasuryRentCollector is AddressAccessor, Pausable {
                 ? _prepareRentCollectionForFraction(
                     rentShare,
                     treasuryTracker,
-                    index
+                    tokenIndex,
+                    fractionIndex
                 )
-                : _prepareRentCollection(rentShare, treasuryTracker, index);
+                : _prepareRentCollection(
+                    rentShare,
+                    treasuryTracker,
+                    tokenIndex
+                );
         _collect(treasury, revenueShare, contractAddress, tokenId);
     }
 
@@ -128,7 +135,8 @@ contract TreasuryRentCollector is AddressAccessor, Pausable {
     function _prepareRentCollectionForFraction(
         address rentShare,
         address treasuryTracker,
-        uint256 index
+        uint256 tokenIndex,
+        uint256 fractionIndex
     )
         private
         view
@@ -140,7 +148,8 @@ contract TreasuryRentCollector is AddressAccessor, Pausable {
     {
         (fractionContractAddress, fractionTokenId) = _fraction(
             treasuryTracker,
-            index
+            tokenIndex,
+            fractionIndex
         );
         (address contractAddress, uint256 tokenId) = _nft(
             fractionContractAddress
@@ -185,17 +194,17 @@ contract TreasuryRentCollector is AddressAccessor, Pausable {
             );
     }
 
-    function _fraction(address treasuryTracker, uint256 index)
-        private
-        view
-        returns (address, uint256)
-    {
+    function _fraction(
+        address treasuryTracker,
+        uint256 tokenIndex,
+        uint256 tokenIdIndex
+    ) private view returns (address, uint256) {
         address fractionContractAddress = toAddress(
             treasuryTracker.functionStaticCall(
                 abi.encodeWithSignature(
                     "tnftFractionsContracts(address,uint256)",
                     realEstateContractAddress,
-                    index
+                    tokenIndex
                 )
             )
         );
@@ -206,7 +215,7 @@ contract TreasuryRentCollector is AddressAccessor, Pausable {
                     abi.encodeWithSignature(
                         "fractionTokensInTreasury(address,uint256)",
                         fractionContractAddress,
-                        index
+                        tokenIdIndex
                     )
                 )
             )

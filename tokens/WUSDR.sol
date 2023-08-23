@@ -1,31 +1,38 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 pragma solidity ^0.8.9;
 
-import "@openzeppelin/contracts/utils/Address.sol";
+import "@openzeppelin/contracts-upgradeable/utils/AddressUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/interfaces/IERC4626Upgradeable.sol";
-import "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
-import "@openzeppelin/contracts-upgradeable/token/ERC20/extensions/draft-ERC20PermitUpgradeable.sol";
+import "@openzeppelin/contracts-upgradeable/security/PausableUpgradeable.sol";
+
+import "@layerzerolabs/solidity-examples/contracts/contracts-upgradable/token/oft/OFTUpgradeable.sol";
 
 import "./WadRayMath.sol";
 import "../interfaces/IUSDR.sol";
 
 contract WrappedUSDR is
-    AccessControlUpgradeable,
-    ERC20PermitUpgradeable,
+    PausableUpgradeable,
+    OFTUpgradeable,
     IERC4626Upgradeable
 {
-    using Address for address;
+    using AddressUpgradeable for address;
     using WadRayMath for uint256;
 
     address public asset;
 
-    function initialize(address usdr) public initializer {
+    function initialize(
+        address _owner,
+        address usdr,
+        address lzEndpoint
+    ) external initializer {
+        __Ownable_init();
+        __Pausable_init();
+        __OFTUpgradeable_init("Wrapped USDR", "wUSDR", lzEndpoint);
+        _transferOwnership(_owner);
         asset = usdr;
-        __ERC20_init("Wrapped USDR", "wUSDR");
-        __ERC20Permit_init("wUSDR");
-        __AccessControl_init();
-        _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
     }
+
+    function reinitialize() external reinitializer(4) {}
 
     function decimals()
         public
@@ -76,6 +83,7 @@ contract WrappedUSDR is
     function deposit(uint256 assets, address receiver)
         external
         override
+        whenNotPaused
         returns (uint256 shares)
     {
         require(
@@ -111,6 +119,7 @@ contract WrappedUSDR is
     function mint(uint256 shares, address receiver)
         external
         override
+        whenNotPaused
         returns (uint256 assets)
     {
         require(
@@ -151,7 +160,7 @@ contract WrappedUSDR is
         uint256 assets,
         address receiver,
         address owner
-    ) external override returns (uint256 shares) {
+    ) external override whenNotPaused returns (uint256 shares) {
         require(
             receiver != address(0),
             "Zero address for receiver not allowed"
@@ -195,7 +204,7 @@ contract WrappedUSDR is
         uint256 shares,
         address receiver,
         address owner
-    ) external override returns (uint256 assets) {
+    ) external override whenNotPaused returns (uint256 assets) {
         require(
             receiver != address(0),
             "Zero address for receiver not allowed"
@@ -272,5 +281,50 @@ contract WrappedUSDR is
                 amount
             )
         );
+    }
+
+    ///
+    /// LayerZero overrides
+    ///
+
+    function sendFrom(
+        address _from,
+        uint16 _dstChainId,
+        bytes calldata _toAddress,
+        uint256 _amount,
+        address payable _refundAddress,
+        address _zroPaymentAddress,
+        bytes calldata _adapterParams
+    ) public payable override whenNotPaused {
+        _send(
+            _from,
+            _dstChainId,
+            _toAddress,
+            _amount,
+            _refundAddress,
+            _zroPaymentAddress,
+            _adapterParams
+        );
+    }
+
+    function _debitFrom(
+        address _from,
+        uint16,
+        bytes memory,
+        uint256 _amount
+    ) internal override returns (uint256) {
+        address spender = _msgSender();
+        if (_from != spender) _spendAllowance(_from, spender, _amount);
+        _transfer(_from, address(this), _amount);
+        return _amount;
+    }
+
+    function _creditTo(
+        uint16,
+        address _toAddress,
+        uint256 _amount
+    ) internal override returns (uint256) {
+        _transfer(address(this), _toAddress, _amount);
+        return _amount;
     }
 }
